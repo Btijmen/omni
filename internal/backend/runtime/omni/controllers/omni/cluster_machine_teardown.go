@@ -18,13 +18,9 @@ import (
 	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/siderolabs/gen/optional"
 	"go.uber.org/zap"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/siderolabs/omni/client/pkg/omni/resources"
 	"github.com/siderolabs/omni/client/pkg/omni/resources/omni"
-	"github.com/siderolabs/omni/internal/backend/runtime"
-	"github.com/siderolabs/omni/internal/backend/runtime/kubernetes"
 	"github.com/siderolabs/omni/internal/backend/runtime/omni/controllers/omni/internal/mappers"
 )
 
@@ -295,30 +291,17 @@ func (ctrl *ClusterMachineTeardownController) teardownNode(
 ) error {
 	clusterName, ok := clusterMachine.Metadata().Labels().Get(omni.LabelCluster)
 	if !ok {
-		return fmt.Errorf("cluster machine %s doesn't have cluster label set", clusterMachine.Metadata().ID())
+		return fmt.Errorf("cluster machine %q doesn't have cluster label set", clusterMachine.Metadata().ID())
 	}
 
-	type kubeRuntime interface {
-		GetClient(ctx context.Context, cluster string) (*kubernetes.Client, error)
-	}
-
-	k8s, err := runtime.LookupInterface[kubeRuntime](kubernetes.Name)
+	kubeClient, err := getKubernetesClient(ctx, clusterName)
 	if err != nil {
-		return err
+		return fmt.Errorf("error getting kubernetes client: %w", err)
 	}
-
-	k8sClient, err := k8s.GetClient(ctx, clusterName)
-	if err != nil {
-		return fmt.Errorf("error getting kubernetes client for cluster %q: %w", clusterName, err)
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
 
 	nodename := clusterMachineIdentity.TypedSpec().Value.Nodename
 
-	err = k8sClient.Clientset().CoreV1().Nodes().Delete(ctx, nodename, metav1.DeleteOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err = kubeClient.DeleteNode(ctx, nodename); err != nil {
 		return fmt.Errorf("error deleting node %q in cluster %q: %w", nodename, clusterName, err)
 	}
 
